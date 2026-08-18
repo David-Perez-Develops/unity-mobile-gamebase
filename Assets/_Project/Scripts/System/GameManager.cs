@@ -1,10 +1,18 @@
+using System;
 using CustomTween;
 using UnityEngine;
 
+/// <summary>
+/// Owns application-level flow only. Concrete gameplay lives outside the Starter Kit
+/// and can subscribe to the lifecycle callbacks below.
+/// </summary>
 public class GameManager : SingletonDontDestroy<GameManager>
 {
-    public LevelController levelController;
     public GameState gameState;
+
+    public static event Action GameStarted;
+    public static event Action GameReturnedHome;
+    public static event Action GameReplayRequested;
 
     protected override void Awake()
     {
@@ -13,76 +21,46 @@ public class GameManager : SingletonDontDestroy<GameManager>
         Input.multiTouchEnabled = true;
         CustomTweenConfig.warnZeroDuration = false;
     }
-    
-    void Start()
+
+    private void Start()
     {
         ReturnHome();
     }
 
-    public void PlayCurrentLevel(bool ignorePrepareLevel = true)
-    {
-        if (ignorePrepareLevel) PrepareLevel();
-        StartGame();
-    }
-
-    public void PrepareLevel()
-    {
-        gameState = GameState.PrepareGame;
-        levelController.PrepareLevel();
-    }
-
     public void ReturnHome()
     {
-        PrepareLevel();
-        
+        gameState = GameState.Home;
+
         SoundController.Instance.PlayBackground(SoundName.HomeBackgroundMusic);
         PopupController.Instance.HideAll();
         PopupController.Instance.Show<PopupBackground>();
         PopupController.Instance.Show<PopupHome>();
+
+        GameReturnedHome?.Invoke();
+    }
+
+    public void StartGame()
+    {
+        gameState = GameState.PlayingGame;
+
+        SoundController.Instance.PlayBackground(SoundName.InGameBackgroundMusic);
+        PopupController.Instance.HideAll();
+        PopupController.Instance.Show<PopupInGame>();
+
+        GameStarted?.Invoke();
     }
 
     public void ReplayGame()
     {
-        Observer.ReplayLevel?.Invoke(levelController.currentLevel);
-        PrepareLevel();
+        GameReplayRequested?.Invoke();
         StartGame();
-    }
-
-    public void BackLevel()
-    {
-        Data.PlayerData.CurrentLevelIndex--;
-        
-        PrepareLevel();
-        StartGame();
-    }
-
-    public void NextLevel()
-    {
-        Observer.SkipLevel?.Invoke(levelController.currentLevel);
-        Data.PlayerData.CurrentLevelIndex++;
-
-        PrepareLevel();
-        StartGame();
-    }
-    
-    public void StartGame()
-    {
-        gameState = GameState.PlayingGame;
-        Observer.StartLevel?.Invoke(levelController.currentLevel);
-        
-        SoundController.Instance.PlayBackground(SoundName.InGameBackgroundMusic);
-        PopupController.Instance.HideAll();
-        PopupController.Instance.Show<PopupInGame>();
-        
-        levelController.currentLevel.gameObject.SetActive(true);
     }
 
     public void OnWinGame(float delayPopupShowTime = 2.5f)
     {
-        if (gameState == GameState.WaitingResult || gameState == GameState.LoseGame || gameState == GameState.WinGame) return;
+        if (IsShowingResult()) return;
         gameState = GameState.WinGame;
-        Observer.WinLevel?.Invoke(levelController.currentLevel);
-        Data.PlayerData.CurrentLevelIndex++;
+
         Sequence.Create().ChainDelay(delayPopupShowTime).ChainCallback(() =>
         {
             PopupController.Instance.HideAll();
@@ -92,24 +70,30 @@ public class GameManager : SingletonDontDestroy<GameManager>
             }
         });
     }
-    
+
     public void OnLoseGame(float delayPopupShowTime = 2.5f)
     {
-        if (gameState == GameState.WaitingResult || gameState == GameState.LoseGame || gameState == GameState.WinGame) return;
+        if (IsShowingResult()) return;
         gameState = GameState.LoseGame;
-        Observer.LoseLevel?.Invoke(levelController.currentLevel);
-        
+
         Sequence.Create().ChainDelay(delayPopupShowTime).ChainCallback(() =>
         {
             PopupController.Instance.Hide<PopupInGame>();
             PopupController.Instance.Show<PopupLose>();
         });
     }
+
+    private bool IsShowingResult()
+    {
+        return gameState == GameState.WaitingResult ||
+               gameState == GameState.LoseGame ||
+               gameState == GameState.WinGame;
+    }
 }
 
 public enum GameState
 {
-    PrepareGame,
+    Home,
     PlayingGame,
     WaitingResult,
     LoseGame,
