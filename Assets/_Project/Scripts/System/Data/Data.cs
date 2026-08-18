@@ -1,62 +1,91 @@
+using System;
 using System.IO;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using UnityEngine;
 
-public static class Data 
+public static class Data
 {
-    public static PlayerData PlayerData;
-    public static string SavePath = Application.persistentDataPath + "/player_data.json";
+    public static PlayerData PlayerData { get; private set; }
+    public static readonly string SavePath = Path.Combine(Application.persistentDataPath, "player_data.json");
+    public static readonly string BackupPath = SavePath + ".bak";
+
+    private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings
+    {
+        ContractResolver = new CamelCasePropertyNamesContractResolver()
+    };
+
     public static void SaveData()
     {
-        var jsonSettings = new JsonSerializerSettings { ContractResolver = new CamelCasePropertyNamesContractResolver() };
-        string jsonData = JsonConvert.SerializeObject(PlayerData, Formatting.Indented, jsonSettings);
+        if (PlayerData == null) PlayerData = new PlayerData();
+        PlayerData.PrepareForSave();
 
-        // Encrypt the JSON data
-        string encryptedData = EncryptionHelper.Encrypt(jsonData);
-        File.WriteAllText(SavePath, encryptedData);
-        Debug.Log("<color=green>Save player data (encrypted) succeed</color>");
+        try
+        {
+            string jsonData = JsonConvert.SerializeObject(PlayerData, Formatting.Indented, JsonSettings);
+            string encryptedData = EncryptionHelper.Encrypt(jsonData);
+
+            if (File.Exists(SavePath)) File.Copy(SavePath, BackupPath, true);
+            File.WriteAllText(SavePath, encryptedData);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"Unable to save player data: {exception.Message}");
+        }
     }
 
     public static void LoadData()
     {
-        if (File.Exists(SavePath))
+        if (TryLoad(SavePath, out PlayerData)) return;
+
+        if (TryLoad(BackupPath, out PlayerData))
         {
-            string encryptedData = File.ReadAllText(SavePath);
-
-            // Decrypt the data before loading
-            string decryptedData = EncryptionHelper.Decrypt(encryptedData);
-            PlayerData = JsonConvert.DeserializeObject<PlayerData>(decryptedData);
-
-            Debug.Log("<color=green>Load player data (decrypted) succeed</color>");
+            Debug.LogWarning("Primary save was invalid. Recovered player data from backup.");
+            SaveData();
+            return;
         }
-        else
+
+        PlayerData = new PlayerData();
+        PlayerData.MigrateIfNeeded();
+    }
+
+    private static bool TryLoad(string path, out PlayerData playerData)
+    {
+        playerData = null;
+        if (!File.Exists(path)) return false;
+
+        try
         {
-            PlayerData = new PlayerData();
-            Debug.Log("<color=green>Create new player data ... </color>");
+            string encryptedData = File.ReadAllText(path);
+            string decryptedData = EncryptionHelper.Decrypt(encryptedData);
+            playerData = JsonConvert.DeserializeObject<PlayerData>(decryptedData);
+            if (playerData == null) return false;
+            playerData.MigrateIfNeeded();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"Unable to load save '{path}': {exception.Message}");
+            return false;
         }
     }
 
     public static void ClearData()
     {
-        if (File.Exists(SavePath))
-        {
-            File.Delete(SavePath);
-            Debug.Log("<color=green>Clear player data succeed </color>");
-        }
-        else
-        {
-            Debug.LogWarning("No save file found to delete!");
-        }
+        if (File.Exists(SavePath)) File.Delete(SavePath);
+        if (File.Exists(BackupPath)) File.Delete(BackupPath);
+        PlayerData = new PlayerData();
     }
 
     public static async Task UpdateData(string jsonContent)
     {
-        Debug.Log(Application.persistentDataPath);
+        PlayerData updated = JsonConvert.DeserializeObject<PlayerData>(jsonContent);
+        if (updated == null) throw new InvalidDataException("Player data JSON is invalid.");
+
+        updated.MigrateIfNeeded();
         string encryptedData = EncryptionHelper.Encrypt(jsonContent);
         await File.WriteAllTextAsync(SavePath, encryptedData);
-        PlayerData = JsonConvert.DeserializeObject<PlayerData>(jsonContent);
-        Debug.Log("<color=green>Update player data succeed </color>");
+        PlayerData = updated;
     }
 }
